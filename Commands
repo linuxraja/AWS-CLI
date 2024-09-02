@@ -1,0 +1,2 @@
+# 1. List all instances with Name, ID & Type in a table format
+aws ec2 describe-instances --query 'Reservations[*].Instances[*].{ID:InstanceId,Name:Tags[?Key==`Name`]|[0].Value,Type:InstanceType}' --output table
