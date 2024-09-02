@@ -1,2 +1,66 @@
 # 1. List all instances with Name, ID & Type in a table format
 aws ec2 describe-instances --query 'Reservations[*].Instances[*].{ID:InstanceId,Name:Tags[?Key==`Name`]|[0].Value,Type:InstanceType}' --output table
+
+Convert to CSV 
+#!/bin/bash
+
+# Output file name
+output_file="ec2_instances.csv"
+
+# Write header to the CSV file
+echo "InstanceID,Name,InstanceType" > $output_file
+
+############ Describe all EC2 instances and filter for IDs, Names, and Types, then format as CSV
+aws ec2 describe-instances \
+    --query 'Reservations[*].Instances[*].[InstanceId, Tags[?Key==`Name`]|[0].Value, InstanceType]' \
+    --output text | \
+    awk -v OFS=',' '{print $1, $2, $3}' >> $output_file
+
+echo "Output saved to $output_file"
+
+############ List all instances with Name, ID, Type, Available CPU, CPU Utilization last one year, Instance State in a table format
+#!/bin/bash
+
+# Output file name
+output_file="ec2_instances_with_cpu_utilization.csv"
+
+# Write header to the CSV file
+echo "InstanceID,Name,InstanceType,AvailablevCPUs,InstanceState,AverageCPUUtilization" > $output_file
+
+# Function to get the number of vCPUs for a given instance type
+get_vcpu_count() {
+    instance_type=$1
+    aws ec2 describe-instance-types \
+        --instance-types $instance_type \
+        --query 'InstanceTypes[0].VCpuInfo.DefaultVCpus' \
+        --output text
+}
+
+# Describe all EC2 instances and get the required details
+aws ec2 describe-instances \
+    --query 'Reservations[*].Instances[*].[InstanceId, Tags[?Key==`Name`]|[0].Value, InstanceType, State.Name]' \
+    --output text | \
+    while read -r instance_id name instance_type instance_state; do
+        # Get the available vCPUs for the instance type
+        available_vcpus=$(get_vcpu_count $instance_type)
+
+        # Get the average CPU utilization over the last year
+        cpu_utilization=$(aws cloudwatch get-metric-statistics \
+            --metric-name CPUUtilization \
+            --start-time $(date -d '1 year ago' --utc +%Y-%m-%dT%H:%M:%SZ) \
+            --end-time $(date --utc +%Y-%m-%dT%H:%M:%SZ) \
+            --period 86400 \
+            --namespace AWS/EC2 \
+            --statistics Average \
+            --dimensions Name=InstanceId,Value=$instance_id \
+            --query 'Datapoints[*].Average' \
+            --output text)
+
+        # Calculate the average CPU utilization across all data points
+        avg_cpu=$(echo "$cpu_utilization" | awk '{ sum += $1; count++ } END { if (count > 0) print sum / count; else print 0 }')
+
+        # Write the instance details, available vCPUs, state, and average CPU utilization to the CSV file
+        echo "$instance_id,$name,$instance_type,$available_vcpus,$instance_state,$avg_cpu" >> $output_file
+    done
+
+echo "Instance details with CPU utilization, available vCPUs, and state data saved to $output_file"
