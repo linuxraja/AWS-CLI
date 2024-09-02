@@ -1,0 +1,114 @@
+Getting memory utilization directly from AWS CloudWatch for EC2 instances is not straightforward because EC2 does not automatically publish memory metrics to CloudWatch.
+You typically need to install and configure the CloudWatch Agent on your instances to collect memory utilization metrics. Here’s a high-level overview of how you can set up and retrieve memory utilization:
+
+Note: CloudWatch Agent Installation: You need to install and configure the CloudWatch Agent on each instance.
+
+Install the CloudWatch Agent: For Amazon Linux, Ubuntu, or Debian: You can use the CloudWatch Agent to collect and send memory metrics to CloudWatch.
+For Windows: Use the CloudWatch Agent for Windows.
+
+Configure the CloudWatch Agent: You need to create a CloudWatch Agent configuration file to specify which metrics to collect, including memory usage.
+Deploy the configuration to your instances.
+
+Retrieve Memory Utilization Metrics: After the CloudWatch Agent is running and collecting memory metrics, you can query these metrics using the AWS CLI.
+
+Step-by-Step Example:
+1. Install and Configure the CloudWatch Agent
+
+For Amazon Linux or Ubuntu:
+# Install the CloudWatch Agent
+sudo yum install amazon-cloudwatch-agent -y  # For Amazon Linux
+sudo apt-get install amazon-cloudwatch-agent -y  # For Ubuntu
+
+# Create the configuration file for the CloudWatch Agent
+sudo nano /opt/aws/amazon-cloudwatch-agent/bin/config.json
+
+Example config.json:
+
+json
+Copy code
+{
+  "agent": {
+    "metrics_collection_interval": 60
+  },
+  "metrics": {
+    "namespace": "CWAgent",
+    "metrics_collected": {
+      "mem": {
+        "measurement": [
+          "mem_used_percent"
+        ],
+        "metrics_collection_interval": 60
+      }
+    }
+  }
+}
+
+For Windows:
+
+Download and install the CloudWatch Agent.
+Use the AWS Systems Manager Parameter Store or AWS CloudFormation for deployment.
+
+2. Start the CloudWatch Agent
+For Amazon Linux or Ubuntu:
+sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a start -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/bin/config.json
+
+For Windows:
+Start the CloudWatch Agent from the Services console or command line.
+
+3. Retrieve Memory Utilization Metrics
+Once the CloudWatch Agent is running and publishing memory metrics, you can use the AWS CLI to retrieve them:
+
+#!/bin/bash
+
+# Output file name
+output_file="ec2_instances_with_memory_utilization.csv"
+
+# Write header to the CSV file
+echo "InstanceID,Name,InstanceType,AvailablevCPUs,InstanceState,AverageMemoryUtilization" > $output_file
+
+# Function to get the number of vCPUs for a given instance type
+get_vcpu_count() {
+    instance_type=$1
+    aws ec2 describe-instance-types \
+        --instance-types $instance_type \
+        --query 'InstanceTypes[0].VCpuInfo.DefaultVCpus' \
+        --output text
+}
+
+# Describe all EC2 instances and get the required details
+aws ec2 describe-instances \
+    --query 'Reservations[*].Instances[*].[InstanceId, Tags[?Key==`Name`]|[0].Value, InstanceType, State.Name]' \
+    --output text | \
+    while read -r instance_id name instance_type instance_state; do
+        # Get the available vCPUs for the instance type
+        available_vcpus=$(get_vcpu_count $instance_type)
+
+        # Get the average memory utilization over the last year
+        memory_utilization=$(aws cloudwatch get-metric-statistics \
+            --metric-name mem_used_percent \
+            --namespace CWAgent \
+            --start-time $(date -d '1 year ago' --utc +%Y-%m-%dT%H:%M:%SZ) \
+            --end-time $(date --utc +%Y-%m-%dT%H:%M:%SZ) \
+            --period 86400 \
+            --statistics Average \
+            --dimensions Name=InstanceId,Value=$instance_id \
+            --query 'Datapoints[*].Average' \
+            --output text)
+
+        # Calculate the average memory utilization across all data points
+        avg_memory=$(echo "$memory_utilization" | awk '{ sum += $1; count++ } END { if (count > 0) print sum / count; else print 0 }')
+
+        # Write the instance details, available vCPUs, state, and average memory utilization to the CSV file
+        echo "$instance_id,$name,$instance_type,$available_vcpus,$instance_state,$avg_memory" >> $output_file
+    done
+
+echo "Instance details with memory utilization, available vCPUs, and state saved to $output_file"
+
+
+
+
+
+
+
+
+
